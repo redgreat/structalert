@@ -1,0 +1,25 @@
+FROM python:3.12-slim
+
+WORKDIR /opt/structalert
+
+ENV PYTHONPATH=/opt/structalert \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai
+
+# 替换 APT 源为阿里云国内源 (静默处理兼顾不同版本的 Debian sources 文件)
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+COPY requirements.txt /opt/structalert/requirements.txt
+# 使用阿里云 PIP 国内源来加速依赖安装
+RUN python -m pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r /opt/structalert/requirements.txt
+
+COPY structalert/ /opt/structalert/structalert/
+COPY config/ /opt/structalert/config/
+CMD ["python", "-m", "structalert", "run-scheduler", "--config", "/opt/structalert/config/config.yml"]

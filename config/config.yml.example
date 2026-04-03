@@ -1,0 +1,82 @@
+app:
+  name: "structalert"
+  env: "local"
+
+logging:
+  level: "INFO"
+  directory: "./logs"
+
+databases:
+  source:
+    host: "127.0.0.1"
+    port: 3306
+    user: "root"
+    password: "change_me"
+    database: "serviceordercenter"
+    charset: "utf8mb4"
+    connect_timeout: 10
+    read_timeout: 30
+    write_timeout: 30
+    max_connections: 10
+  his:
+    host: "127.0.0.1"
+    port: 3307
+    user: "root"
+    password: "change_me"
+    database: "serviceordercenter_his"
+    charset: "utf8mb4"
+    connect_timeout: 10
+    read_timeout: 30
+    write_timeout: 30
+    max_connections: 10
+  cfg:
+    host: "127.0.0.1"
+    port: 3308
+    user: "root"
+    password: "change_me"
+    database: "serviceordercenter"
+    charset: "utf8mb4"
+    connect_timeout: 10
+    read_timeout: 30
+    write_timeout: 30
+    max_connections: 10
+
+wecom:
+  webhook_key: ""
+
+# 数据同步配置
+sync:
+  # 增量同步：同步多少天前的数据（从今天开始计算）
+  # 例如：days_before: 30 表示同步30天前的那一周的数据（7天时间窗口）
+  # 设置为 null 或删除此配置项表示全量同步
+  days_before: null
+
+  # 批量写入大小：每次批量INSERT/UPDATE的记录数
+  # 值越大，性能越好，但内存消耗也越大
+  batch_size: 500
+
+  # 并发线程数：数据写入的并发工作线程数
+  # 建议设置为2-4，过大会增加数据库压力
+  concurrency: 2
+
+  # 删除批量大小：批量删除废弃数据时每批的记录数
+  # 用于清理源库已删除但目标库仍存在的数据
+  delete_batch_size: 1000
+
+  # 试运行模式：true表示只模拟执行不实际写入数据，false表示实际执行
+  # 建议首次运行时设置为true，验证无误后再设置为false
+  dry_run: true
+
+schedule_set:
+  daily_struct_compare:
+    enabled: true
+    # 每天凌晨两点执行结构对比
+    schedule: "0 2 * * *"
+    module: "structalert.tasks"
+    function: "run_daily_comparison"
+  weekly_data_sync:
+    enabled: true
+    # 每周日凌晨三点执行数据同步(在结构对比之后)
+    schedule: "0 3 * * 0"
+    module: "structalert.tasks"
+    function: "run_weekly_sync"

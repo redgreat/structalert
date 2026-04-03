@@ -1,0 +1,24 @@
+services:
+  structalert:
+    image: registry.cn-hangzhou.aliyuncs.com/redgreat/structalert:latest
+    container_name: structalert
+    restart: unless-stopped
+    environment:
+      - PYTHONPATH=/opt/structalert
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./logs:/opt/structalert/logs:rw
+      - ./config:/opt/structalert/config:ro
+    command: [ "python", "-m", "structalert", "run-scheduler", "--config", "/opt/structalert/config/config.yml" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "python -m structalert validate-config --config /opt/structalert/config/config.yml >/dev/null" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

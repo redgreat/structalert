@@ -1,0 +1,1 @@
+# structalert package initializer
