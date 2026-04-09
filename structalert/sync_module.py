@@ -12,7 +12,7 @@ class DataSynchronizer:
 
     def sync_table(self, table_name: str, date_column: str = None, 
                    days_before: int = None, batch_size: int = 5000, max_workers: int = 4,
-                   delete_batch_size: int = 1000, dry_run: bool = False):
+                   dry_run: bool = False):
         """
         同步表数据
         
@@ -22,12 +22,11 @@ class DataSynchronizer:
             days_before: 同步多少天前的数据（从今天开始计算），None表示全量同步
             batch_size: 批量写入大小
             max_workers: 并发写入线程数
-            delete_batch_size: 批量删除大小
             dry_run: 试运行模式，True表示只模拟不实际执行
         """
         logger.info(f"开始同步表数据: {table_name}")
         if dry_run:
-            logger.warning("【试运行模式】不会实际写入或删除数据")
+            logger.warning("【试运行模式】不会实际写入数据")
         
         # 判断是增量同步还是全量同步
         is_incremental = date_column and days_before is not None
@@ -46,7 +45,7 @@ class DataSynchronizer:
             # 1. 获取主键
             pks = self.source.get_primary_keys(table_name)
             if not pks:
-                logger.warning(f"表 {table_name} 没有主键，全量同步删除策略和 UPSERT 可能无法完美支持，请确认。")
+                logger.warning(f"表 {table_name} 没有主键，UPSERT 可能无法完美支持，请确认。")
 
             # 2. 获取表列名以构建 UPSERT 语句
             columns = self._get_table_columns(table_name)
@@ -59,14 +58,6 @@ class DataSynchronizer:
             # 3. 流式读取和多线程写入
             self._sync_upsert_data(table_name, columns, upsert_sql, batch_size, max_workers, 
                                    date_column, days_before, dry_run)
-
-            # 4. 删除目标库多余数据 (处理源端由硬删除造成的数据)
-            # 增量同步时，只删除指定日期范围内的数据
-            if pks and len(pks) == 1:
-                self._sync_deletes_single_pk(table_name, pks[0], date_column, days_before, 
-                                            delete_batch_size, dry_run)
-            else:
-                logger.warning(f"表 {table_name} 为复合主键或无主键，暂时跳过删除检测同步。")
 
             logger.info(f"表 {table_name} 数据同步完成。")
         finally:
@@ -181,65 +172,3 @@ class DataSynchronizer:
         # 目标端批量写入
         affected = self.target.execute_many(sql, batch_data)
         return affected
-
-    def _sync_deletes_single_pk(self, table_name: str, pk_col: str, 
-                                date_column: str = None, days_before: int = None,
-                                delete_batch_size: int = 1000, dry_run: bool = False):
-        # 处理删除: 查询源端和目的端的所有 PK 并进行集合差值计算
-        logger.info(f"开始比对 {table_name} ({pk_col}) 的废弃数据...")
-        
-        try:
-            # 构建查询SQL，支持增量删除检测
-            if date_column and days_before is not None:
-                # 增量删除：只比对指定日期范围内的数据
-                today = datetime.now().date()
-                end_date = today - timedelta(days=days_before)
-                start_date = end_date - timedelta(days=7)
-                
-                logger.info(f"增量删除检测日期范围: {start_date} <= {date_column} < {end_date}")
-                
-                source_pks = set(row[pk_col] for row in self.source.fetch_all(
-                    f"SELECT `{pk_col}` FROM `{table_name}` WHERE `{date_column}` >= %s AND `{date_column}` < %s",
-                    (start_date, end_date)
-                ))
-                target_pks = set(row[pk_col] for row in self.target.fetch_all(
-                    f"SELECT `{pk_col}` FROM `{table_name}` WHERE `{date_column}` >= %s AND `{date_column}` < %s",
-                    (start_date, end_date)
-                ))
-            else:
-                # 全量删除检测
-                source_pks = set(row[pk_col] for row in self.source.fetch_all(f"SELECT `{pk_col}` FROM `{table_name}`"))
-                target_pks = set(row[pk_col] for row in self.target.fetch_all(f"SELECT `{pk_col}` FROM `{table_name}`"))
-        except Exception as e:
-            logger.error(f"提取主键用于比对删除时发生错误: {e}")
-            return
-            
-        to_delete = target_pks - source_pks
-        
-        if not to_delete:
-            logger.info(f"[{table_name}] 没有需要删除的废弃记录。")
-            return
-            
-        logger.info(f"[{table_name}] 检测到 {len(to_delete)} 条源库已删除而在目标库存在的记录，准备执行同步删除。")
-        
-        # 分批清理
-        delete_list = list(to_delete)
-        total_deleted = 0
-        
-        for i in range(0, len(delete_list), delete_batch_size):
-            chunk = delete_list[i:i + delete_batch_size]
-            placeholders = ",".join(["%s"] * len(chunk))
-            del_sql = f"DELETE FROM `{table_name}` WHERE `{pk_col}` IN ({placeholders})"
-            
-            if dry_run:
-                # 试运行模式：只记录不执行
-                logger.info(f"【试运行】将删除 {len(chunk)} 条记录")
-                total_deleted += len(chunk)
-            else:
-                try:
-                    self.target.execute(del_sql, tuple(chunk))
-                    total_deleted += len(chunk)
-                except Exception as e:
-                    logger.error(f"执行删除操作失败: {e}")
-                
-        logger.info(f"[{table_name}] {'【试运行】' if dry_run else ''}共处理删除 {total_deleted} 条记录。")

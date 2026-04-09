@@ -177,7 +177,6 @@ def run_weekly_sync():
     days_before = sync_config.get('days_before', None)  # None表示全量同步
     batch_size = sync_config.get('batch_size', 5000)
     concurrency = sync_config.get('concurrency', 4)
-    delete_batch_size = sync_config.get('delete_batch_size', 1000)
     dry_run = sync_config.get('dry_run', False)
     
     if days_before is not None:
@@ -185,8 +184,7 @@ def run_weekly_sync():
     else:
         logger.info("全量同步模式")
     
-    logger.info(f"同步参数: batch_size={batch_size}, concurrency={concurrency}, "
-                f"delete_batch_size={delete_batch_size}, dry_run={dry_run}")
+    logger.info(f"同步参数: batch_size={batch_size}, concurrency={concurrency}, dry_run={dry_run}")
 
     # 执行数据同步
     synchronizer = DataSynchronizer(source_db=source_db, target_db=his_db)
@@ -203,7 +201,6 @@ def run_weekly_sync():
                 days_before=days_before,
                 batch_size=batch_size,
                 max_workers=concurrency,
-                delete_batch_size=delete_batch_size,
                 dry_run=dry_run
             )
             logger.info(f"表 {tb_name} 数据同步完成。")
@@ -347,7 +344,6 @@ def run_manual_sync_with_compare():
     days_before = sync_config.get('days_before', None)  # None表示全量同步
     batch_size = sync_config.get('batch_size', 5000)
     concurrency = sync_config.get('concurrency', 4)
-    delete_batch_size = sync_config.get('delete_batch_size', 1000)
     dry_run = sync_config.get('dry_run', False)
     
     if days_before is not None:
@@ -355,8 +351,7 @@ def run_manual_sync_with_compare():
     else:
         logger.info("全量同步模式")
     
-    logger.info(f"同步参数: batch_size={batch_size}, concurrency={concurrency}, "
-                f"delete_batch_size={delete_batch_size}, dry_run={dry_run}")
+    logger.info(f"同步参数: batch_size={batch_size}, concurrency={concurrency}, dry_run={dry_run}")
     
     synchronizer = DataSynchronizer(source_db=source_db, target_db=his_db)
 
@@ -372,7 +367,6 @@ def run_manual_sync_with_compare():
                 days_before=days_before,
                 batch_size=batch_size,
                 max_workers=concurrency,
-                delete_batch_size=delete_batch_size,
                 dry_run=dry_run
             )
             logger.info(f"表 {tb_name} 数据同步完成。")
