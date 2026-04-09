@@ -35,11 +35,10 @@ class DataSynchronizer:
         else:
             logger.info(f"全量同步模式")
 
-        # 禁用外键检查，防止写入时因外键限制失败
         try:
-            self.target.execute("SET FOREIGN_KEY_CHECKS = 0")
+            self.target.set_session_overrides({"FOREIGN_KEY_CHECKS": 0})
         except Exception as e:
-            logger.warning(f"禁用外键检查失败: {e}")
+            logger.warning(f"设置会话参数失败: {e}")
 
         try:
             # 1. 获取主键
@@ -63,7 +62,7 @@ class DataSynchronizer:
         finally:
             # 恢复外键检查
             try:
-                self.target.execute("SET FOREIGN_KEY_CHECKS = 1")
+                self.target.set_session_overrides({})
             except Exception as e:
                 logger.warning(f"恢复外键检查失败: {e}")
 

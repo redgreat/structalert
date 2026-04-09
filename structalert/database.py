@@ -35,8 +35,25 @@ class DatabaseManager:
         self.connection_pool = Queue(maxsize=self.max_connections)
         self.pool_lock = threading.Lock()
 
+        self._session_overrides = {}
+        self._session_overrides_lock = threading.Lock()
+
         # 初始化连接池
         self._init_pool()
+
+    def set_session_overrides(self, overrides: dict):
+        """设置需要在每个会话连接上强制应用的参数（用于多连接/连接池场景保证一致性）。"""
+        normalized = {}
+        if overrides:
+            for k, v in overrides.items():
+                if k is None:
+                    continue
+                key = str(k).strip()
+                if not key:
+                    continue
+                normalized[key.upper()] = v
+        with self._session_overrides_lock:
+            self._session_overrides = normalized
 
     def _init_pool(self):
         """初始化连接池"""
@@ -63,6 +80,16 @@ class DatabaseManager:
             write_timeout=self.write_timeout
         )
 
+    def _apply_session_overrides(self, conn):
+        """对当前连接应用会话级参数，确保连接池中每个连接行为一致。"""
+        with self._session_overrides_lock:
+            items = list(self._session_overrides.items())
+        if not items:
+            return
+        with conn.cursor() as cursor:
+            for key, value in items:
+                cursor.execute(f"SET SESSION {key} = %s", (value,))
+
     def _get_connection(self):
         """从连接池获取连接"""
         try:
@@ -71,13 +98,18 @@ class DatabaseManager:
             # 测试连接是否有效
             try:
                 conn.ping(reconnect=True)
+                self._apply_session_overrides(conn)
                 return conn
             except Exception:
                 # 连接失效，创建新连接
-                return self._create_connection()
+                conn = self._create_connection()
+                self._apply_session_overrides(conn)
+                return conn
         except Exception:
             # 连接池为空或超时，创建新连接
-            return self._create_connection()
+            conn = self._create_connection()
+            self._apply_session_overrides(conn)
+            return conn
 
     def _return_connection(self, conn):
         """归还连接到连接池"""
