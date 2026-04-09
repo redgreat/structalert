@@ -32,4 +32,6 @@ docker ps -a --filter "name=structalert"
 
 echo "=========================================="
 echo "    容器已更新并重启完成！"
+echo "    手动执行对比和同步："
+echo "docker compose exec structalert python -m structalert compare-now --config /opt/structalert/config/config.yml"
 echo "=========================================="

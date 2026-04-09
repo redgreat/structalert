@@ -8,6 +8,7 @@ env/
 
 logs/
 data/
+sql/
 
 config/*.yml
 !config/*.yml.example

@@ -1,4 +1,5 @@
 from loguru import logger
+import re
 
 class DatabaseComparator:
     def __init__(self, source_db, target_db):
@@ -225,17 +226,57 @@ class DatabaseComparator:
         if not sql:
             return None
 
-        # 去除首尾空格
         sql = sql.strip()
-
-        # 统一换行符
         sql = sql.replace('\r\n', '\n').replace('\r', '\n')
 
-        # 去除多余的空行
-        lines = [line.strip() for line in sql.split('\n') if line.strip()]
-        sql = '\n'.join(lines)
+        sql = re.sub(r"/\*![\s\S]*?\*/", "", sql)
+        sql = re.sub(r"/\*[\s\S]*?\*/", "", sql)
 
-        # 去除多余的空格
-        sql = ' '.join(sql.split())
+        sql = re.sub(r"(?i)\bDEFINER\s*=\s*`[^`]*`\s*@\s*`[^`]*`", "", sql)
+        sql = re.sub(r"(?i)\bDEFINER\s*=\s*[^ ]+", "", sql)
 
+        def strip_inline_comment(line: str) -> str:
+            in_single = False
+            in_double = False
+            in_backtick = False
+            i = 0
+            while i < len(line):
+                ch = line[i]
+                if ch == "'" and not in_double and not in_backtick:
+                    if in_single and i + 1 < len(line) and line[i + 1] == "'":
+                        i += 2
+                        continue
+                    in_single = not in_single
+                    i += 1
+                    continue
+                if ch == '"' and not in_single and not in_backtick:
+                    if in_double and i + 1 < len(line) and line[i + 1] == '"':
+                        i += 2
+                        continue
+                    in_double = not in_double
+                    i += 1
+                    continue
+                if ch == "`" and not in_single and not in_double:
+                    in_backtick = not in_backtick
+                    i += 1
+                    continue
+                if not in_single and not in_double and not in_backtick:
+                    if ch == "#":
+                        return line[:i].rstrip()
+                    if ch == "-" and i + 2 < len(line) and line[i:i+2] == "--" and line[i + 2].isspace():
+                        return line[:i].rstrip()
+                i += 1
+            return line.rstrip()
+
+        kept_lines = []
+        for line in sql.split("\n"):
+            stripped = strip_inline_comment(line).strip()
+            if not stripped:
+                continue
+            if stripped.startswith("--") or stripped.startswith("#"):
+                continue
+            kept_lines.append(stripped)
+
+        sql = "\n".join(kept_lines)
+        sql = " ".join(sql.split())
         return sql
