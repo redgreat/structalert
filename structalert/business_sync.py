@@ -226,16 +226,36 @@ class BusinessDataSynchronizer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='业务数据增量同步水位表'
         """
         self.cfg_db.execute(sql)
-        self.cfg_db.execute(
-            f"ALTER TABLE `{self.state_table}` "
-            "ADD COLUMN IF NOT EXISTS `last_delete_timestamp` datetime(3) NOT NULL "
-            "DEFAULT '1970-01-01 00:00:00.000' COMMENT '删除水位时间戳'"
+        self._ensure_column_exists(
+            column_name="last_delete_timestamp",
+            ddl=(
+                f"ALTER TABLE `{self.state_table}` "
+                "ADD COLUMN `last_delete_timestamp` datetime(3) NOT NULL "
+                "DEFAULT '1970-01-01 00:00:00.000' COMMENT '删除水位时间戳'"
+            ),
         )
-        self.cfg_db.execute(
-            f"ALTER TABLE `{self.state_table}` "
-            "ADD COLUMN IF NOT EXISTS `last_delete_id` bigint(20) NOT NULL "
-            "DEFAULT 0 COMMENT '同时间戳下删除ID水位'"
+        self._ensure_column_exists(
+            column_name="last_delete_id",
+            ddl=(
+                f"ALTER TABLE `{self.state_table}` "
+                "ADD COLUMN `last_delete_id` bigint(20) NOT NULL "
+                "DEFAULT 0 COMMENT '同时间戳下删除ID水位'"
+            ),
         )
+
+    def _ensure_column_exists(self, column_name: str, ddl: str):
+        sql = """
+            SELECT 1
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            LIMIT 1
+        """
+        row = self.cfg_db.fetch_one(sql, (self.state_table, column_name))
+        if row:
+            return
+        self.cfg_db.execute(ddl)
 
     def _ensure_delete_log_table(self):
         sql = f"""
