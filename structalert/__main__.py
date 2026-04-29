@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from loguru import logger
 from .docker_scheduler import DockerScheduler
-from .tasks import run_daily_comparison, run_manual_sync_with_compare
+from .tasks import run_business_data_sync, run_daily_comparison, run_manual_sync_with_compare
 
 def setup_logging(config_path=None):
     """设置日志配置"""
@@ -121,10 +121,19 @@ def run_compare_now(config_path):
     run_manual_sync_with_compare()
     logger.info("✅ 手动对比和数据迁移任务执行完成")
 
+
+def run_business_sync_now(config_path):
+    """立即执行一次业务数据增量同步"""
+    setup_logging(config_path)
+    os.environ["CONFIG_PATH"] = config_path
+    logger.info("⚡ 正在手动触发业务数据增量同步任务...")
+    run_business_data_sync()
+    logger.info("✅ 业务数据增量同步任务执行完成")
+
 def main():
     parser = argparse.ArgumentParser(description="structalert 命令行工具")
-    parser.add_argument('command', choices=['validate-config', 'run-scheduler', 'compare-now'], 
-                        help='执行命令 (validate-config, run-scheduler 或 compare-now)')
+    parser.add_argument('command', choices=['validate-config', 'run-scheduler', 'compare-now', 'business-sync-now'], 
+                        help='执行命令 (validate-config, run-scheduler, compare-now 或 business-sync-now)')
     parser.add_argument('--config', '-c', type=str, required=True, help='配置文件路径')
     
     args = parser.parse_args()
@@ -135,6 +144,8 @@ def main():
         run_scheduler(args.config)
     elif args.command == 'compare-now':
         run_compare_now(args.config)
+    elif args.command == 'business-sync-now':
+        run_business_sync_now(args.config)
 
 if __name__ == '__main__':
     main()

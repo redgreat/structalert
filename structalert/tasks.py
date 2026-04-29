@@ -6,6 +6,7 @@ from loguru import logger
 from .database import DatabaseManager
 from .comparator import DatabaseComparator
 from .alert_wecom import WeComAlert
+from .business_sync import BusinessDataSynchronizer
 from .sync_module import DataSynchronizer
 
 def load_config():
@@ -14,6 +15,13 @@ def load_config():
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'config.yml.example')
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
+
+
+def get_config_path():
+    config_path = os.environ.get("CONFIG_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yml'))
+    if not os.path.exists(config_path):
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'config.yml.example')
+    return config_path
 
 def run_daily_comparison():
     """主调度任务入口"""
@@ -374,6 +382,81 @@ def run_manual_sync_with_compare():
             logger.error(f"表 {tb_name} 数据同步过程中发生异常: {e}")
 
     logger.info("手动结构对比和数据迁移任务完成。")
+
+
+def run_business_data_sync():
+    """业务表增量同步任务入口"""
+    logger.info("开始执行业务数据增量同步...")
+
+    config = load_config()
+    config_path = get_config_path()
+
+    try:
+        source_db = DatabaseManager.get_instance("source", config['databases']['source'])
+        his_db = DatabaseManager.get_instance("his", config['databases']['his'])
+        cfg_db = DatabaseManager.get_instance("cfg", config['databases']['cfg'])
+    except Exception as e:
+        logger.error(f"数据库连接初始化失败: {e}")
+        return
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    table_name = "tb_workbussinessjsoninfo"
+
+    try:
+        diff_row = cfg_db.fetch_one(
+            """
+            SELECT 1 AS has_diff
+            FROM cfg_compare_diff
+            WHERE compare_date = %s AND object_type = 'TABLE' AND object_name = %s
+            LIMIT 1
+            """,
+            (today_str, table_name),
+        )
+    except Exception as e:
+        logger.error(f"查询结构对比结果失败: {e}")
+        return
+
+    if diff_row:
+        logger.error(f"表 {table_name} 在今天的结构对比中存在差异，取消业务数据同步。")
+        return
+
+    sync_config = config.get('business_sync', {})
+    batch_size = int(sync_config.get('batch_size', 2000))
+    concurrency = int(sync_config.get('concurrency', 4))
+    dry_run = bool(sync_config.get('dry_run', False))
+    queue_limit = int(sync_config.get('queue_limit', 8))
+
+    state_file = sync_config.get(
+        'state_file',
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'runtime', 'business_sync_state.json')
+    )
+    if not os.path.isabs(state_file):
+        state_file = os.path.abspath(os.path.join(os.path.dirname(config_path), state_file))
+
+    logger.info(
+        f"业务同步参数: table={table_name}, batch_size={batch_size}, "
+        f"concurrency={concurrency}, queue_limit={queue_limit}, dry_run={dry_run}"
+    )
+
+    synchronizer = BusinessDataSynchronizer(
+        source_db=source_db,
+        target_db=his_db,
+        state_file=state_file,
+        table_name=table_name,
+    )
+
+    try:
+        synchronizer.sync_incremental(
+            batch_size=batch_size,
+            max_workers=concurrency,
+            dry_run=dry_run,
+            queue_limit=queue_limit,
+        )
+    except Exception as e:
+        logger.error(f"业务数据同步失败: {e}")
+        raise
+
+    logger.info("业务数据增量同步完成。")
 
 def generate_statistics(all_objects, diff_objects):
     """生成统计信息"""
