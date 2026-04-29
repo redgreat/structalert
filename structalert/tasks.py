@@ -15,14 +15,6 @@ def load_config():
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'config.yml.example')
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
-
-
-def get_config_path():
-    config_path = os.environ.get("CONFIG_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yml'))
-    if not os.path.exists(config_path):
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'config.yml.example')
-    return config_path
-
 def run_daily_comparison():
     """主调度任务入口"""
     logger.info("开始执行数据库结构异动检测...")
@@ -389,7 +381,6 @@ def run_business_data_sync():
     logger.info("开始执行业务数据增量同步...")
 
     config = load_config()
-    config_path = get_config_path()
 
     try:
         source_db = DatabaseManager.get_instance("source", config['databases']['source'])
@@ -425,24 +416,32 @@ def run_business_data_sync():
     concurrency = int(sync_config.get('concurrency', 4))
     dry_run = bool(sync_config.get('dry_run', False))
     queue_limit = int(sync_config.get('queue_limit', 8))
-
-    state_file = sync_config.get(
-        'state_file',
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'runtime', 'business_sync_state.json')
-    )
-    if not os.path.isabs(state_file):
-        state_file = os.path.abspath(os.path.join(os.path.dirname(config_path), state_file))
+    sync_days_per_run = int(sync_config.get('sync_days_per_run', 1))
+    delete_batch_size = int(sync_config.get('delete_batch_size', 2000))
+    delete_sleep_ms = int(sync_config.get('delete_sleep_ms', 0))
+    delete_lag_days = int(sync_config.get('delete_lag_days', 30))
+    strict_delete_guard_enabled = bool(sync_config.get('strict_delete_guard_enabled', True))
+    min_delete_lag_days = int(sync_config.get('min_delete_lag_days', 7))
+    state_table = sync_config.get('state_table', 'cfg_business_sync_state')
+    delete_log_table = sync_config.get('delete_log_table', 'cfg_business_sync_delete_log')
 
     logger.info(
         f"业务同步参数: table={table_name}, batch_size={batch_size}, "
-        f"concurrency={concurrency}, queue_limit={queue_limit}, dry_run={dry_run}"
+        f"concurrency={concurrency}, queue_limit={queue_limit}, "
+        f"sync_days_per_run={sync_days_per_run}, delete_batch_size={delete_batch_size}, "
+        f"delete_sleep_ms={delete_sleep_ms}, delete_lag_days={delete_lag_days}, "
+        f"strict_delete_guard_enabled={strict_delete_guard_enabled}, min_delete_lag_days={min_delete_lag_days}, "
+        f"dry_run={dry_run}, "
+        f"state_table={state_table}, delete_log_table={delete_log_table}"
     )
 
     synchronizer = BusinessDataSynchronizer(
         source_db=source_db,
         target_db=his_db,
-        state_file=state_file,
+        cfg_db=cfg_db,
         table_name=table_name,
+        state_table=state_table,
+        delete_log_table=delete_log_table,
     )
 
     try:
@@ -451,6 +450,12 @@ def run_business_data_sync():
             max_workers=concurrency,
             dry_run=dry_run,
             queue_limit=queue_limit,
+            sync_days_per_run=sync_days_per_run,
+            delete_batch_size=delete_batch_size,
+            delete_sleep_ms=delete_sleep_ms,
+            delete_lag_days=delete_lag_days,
+            strict_delete_guard_enabled=strict_delete_guard_enabled,
+            min_delete_lag_days=min_delete_lag_days,
         )
     except Exception as e:
         logger.error(f"业务数据同步失败: {e}")
