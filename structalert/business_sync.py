@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import time
 
 from loguru import logger
@@ -20,6 +20,13 @@ class BusinessDataSynchronizer:
         id_column: str = "Id",
         state_table: str = "cfg_business_sync_state",
         delete_log_table: str = "cfg_business_sync_delete_log",
+        source_join_enabled: bool = False,
+        source_join_sql: str = "",
+        source_extra_where: str = "",
+        main_alias: str = "a",
+        sync_latest_cutoff_enabled: bool = False,
+        sync_latest_cutoff_days_ago: int = 730,
+        sync_latest_cutoff_datetime: str | None = None,
     ):
         self.source = source_db
         self.target = target_db
@@ -29,6 +36,15 @@ class BusinessDataSynchronizer:
         self.id_column = id_column
         self.state_table = state_table
         self.delete_log_table = delete_log_table
+        self.source_join_enabled = bool(source_join_enabled)
+        self.source_join_sql = (source_join_sql or "").strip()
+        self.source_extra_where = (source_extra_where or "").strip()
+        self.main_alias = main_alias.strip() or "a"
+        self.sync_latest_cutoff_enabled = bool(sync_latest_cutoff_enabled)
+        self.sync_latest_cutoff_days_ago = int(sync_latest_cutoff_days_ago)
+        self.sync_latest_cutoff_datetime = (
+            (sync_latest_cutoff_datetime or "").strip() if sync_latest_cutoff_datetime else ""
+        )
 
     def sync_incremental(
         self,
@@ -45,7 +61,8 @@ class BusinessDataSynchronizer:
     ):
         logger.info(
             f"开始业务数据增量同步: table={self.table_name}, "
-            f"batch_size={batch_size}, max_workers={max_workers}, dry_run={dry_run}"
+            f"batch_size={batch_size}, max_workers={max_workers}, dry_run={dry_run}, "
+            f"source_join_enabled={self.source_join_enabled}"
         )
 
         columns = self._get_physical_columns()
@@ -57,10 +74,17 @@ class BusinessDataSynchronizer:
         upsert_sql = self._build_upsert_sql(columns)
         last_ts, last_id, last_delete_ts, last_delete_id = self._load_watermark()
         run_upper_ts = self._calc_run_upper_ts(last_ts, sync_days_per_run)
+        cutoff_ts = self._compute_sync_latest_cutoff_timestamp()
+        if cutoff_ts:
+            effective_upper_ts = self._min_timestamp_str(run_upper_ts, cutoff_ts)
+        else:
+            effective_upper_ts = run_upper_ts
 
         logger.info(
             f"当前同步水位: {self.watermark_column}={last_ts}, {self.id_column}={last_id}, "
-            f"run_upper_ts={run_upper_ts}, delete_watermark={last_delete_ts}/{last_delete_id}"
+            f"run_upper_ts={run_upper_ts}, effective_upper_ts={effective_upper_ts}, "
+            f"sync_latest_cutoff_ts={cutoff_ts or '—'}, "
+            f"delete_watermark={last_delete_ts}/{last_delete_id}"
         )
 
         total_read = 0
@@ -84,7 +108,7 @@ class BusinessDataSynchronizer:
         try:
             with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
                 for rows, batch_max_ts, batch_max_id in self._read_incremental_batches(
-                    columns, last_ts, last_id, batch_size, run_upper_ts
+                    columns, last_ts, last_id, batch_size, effective_upper_ts
                 ):
                     total_read += len(rows)
                     max_seen_ts, max_seen_id = self._pick_max_watermark(
@@ -158,19 +182,48 @@ class BusinessDataSynchronizer:
             f"ON DUPLICATE KEY UPDATE {update_sql}"
         )
 
+    def _extra_where_clause(self) -> str:
+        if not self.source_extra_where:
+            return ""
+        frag = self.source_extra_where.strip()
+        if frag.upper().startswith("AND "):
+            frag = frag[4:].strip()
+        return f" AND ({frag})"
+
     def _read_incremental_batches(self, columns: list, start_ts: str, start_id: int, batch_size: int, upper_ts: str):
-        select_columns = ", ".join(f"`{col}`" for col in columns)
-        sql = f"""
-            SELECT {select_columns}
-            FROM `{self.table_name}`
-            WHERE (
-                    (`{self.watermark_column}` > %s)
-                 OR (`{self.watermark_column}` = %s AND `{self.id_column}` > %s)
-                  )
-              AND `{self.watermark_column}` <= %s
-            ORDER BY `{self.watermark_column}`, `{self.id_column}`
-            LIMIT %s
-        """
+        ma = self.main_alias
+        extra = self._extra_where_clause()
+        if self.source_join_enabled:
+            if not self.source_join_sql:
+                raise RuntimeError("source_join_enabled 为 true 时必须在配置中提供 source_join_sql（INNER JOIN ...）")
+            select_columns = ", ".join(f"`{ma}`.`{col}` AS `{col}`" for col in columns)
+            sql = f"""
+                SELECT {select_columns}
+                FROM `{self.table_name}` AS `{ma}`
+                {self.source_join_sql}
+                WHERE (
+                        (`{ma}`.`{self.watermark_column}` > %s)
+                     OR (`{ma}`.`{self.watermark_column}` = %s AND `{ma}`.`{self.id_column}` > %s)
+                      )
+                  AND `{ma}`.`{self.watermark_column}` <= %s
+                  {extra}
+                ORDER BY `{ma}`.`{self.watermark_column}`, `{ma}`.`{self.id_column}`
+                LIMIT %s
+            """
+        else:
+            select_columns = ", ".join(f"`{col}`" for col in columns)
+            sql = f"""
+                SELECT {select_columns}
+                FROM `{self.table_name}`
+                WHERE (
+                        (`{self.watermark_column}` > %s)
+                     OR (`{self.watermark_column}` = %s AND `{self.id_column}` > %s)
+                      )
+                  AND `{self.watermark_column}` <= %s
+                  {extra}
+                ORDER BY `{self.watermark_column}`, `{self.id_column}`
+                LIMIT %s
+            """
 
         current_ts = start_ts
         current_id = start_id
@@ -329,6 +382,47 @@ class BusinessDataSynchronizer:
             return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         return str(value)
 
+    def _parse_ts(self, value) -> datetime:
+        if value is None:
+            return datetime(1970, 1, 1, 0, 0, 0, 0)
+        if isinstance(value, datetime):
+            return value
+        s = str(value).strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(s, fmt)
+                if fmt == "%Y-%m-%d":
+                    dt = datetime.combine(dt.date(), time(23, 59, 59, 999000))
+                return dt
+            except ValueError:
+                continue
+        raise ValueError(f"无法解析时间: {value!r}")
+
+    def _format_ts_ms(self, dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    def _min_timestamp_str(self, *vals: str) -> str:
+        parsed = []
+        for v in vals:
+            if v is None or not str(v).strip():
+                continue
+            parsed.append(self._parse_ts(v))
+        if not parsed:
+            raise ValueError("至少需要一个有效时间")
+        return self._format_ts_ms(min(parsed))
+
+    def _compute_sync_latest_cutoff_timestamp(self) -> str | None:
+        """最晚允许迁移的时间上界；None 表示不限制。"""
+        if not self.sync_latest_cutoff_enabled:
+            return None
+        fixed = self.sync_latest_cutoff_datetime.strip() if self.sync_latest_cutoff_datetime else ""
+        if fixed:
+            return self._format_ts_ms(self._parse_ts(fixed))
+        days_ago = max(0, int(self.sync_latest_cutoff_days_ago))
+        cutoff_date = date.today() - timedelta(days=days_ago)
+        cutoff_dt = datetime.combine(cutoff_date, time(23, 59, 59, 999000))
+        return self._format_ts_ms(cutoff_dt)
+
     def _calc_run_upper_ts(self, last_ts: str, sync_days_per_run: int) -> str:
         try:
             base_dt = datetime.strptime(last_ts, "%Y-%m-%d %H:%M:%S.%f")
@@ -385,19 +479,41 @@ class BusinessDataSynchronizer:
         batch_size = max(100, int(delete_batch_size))
         sleep_seconds = max(0, int(delete_sleep_ms)) / 1000.0
         started = time.time()
-        delete_sql = f"""
-            DELETE FROM `{self.table_name}`
-            WHERE (
-                    (`{self.watermark_column}` > %s)
-                 OR (`{self.watermark_column}` = %s AND `{self.id_column}` > %s)
-                  )
-              AND (
-                    (`{self.watermark_column}` < %s)
-                 OR (`{self.watermark_column}` = %s AND `{self.id_column}` <= %s)
-                  )
-            ORDER BY `{self.watermark_column}`, `{self.id_column}`
-            LIMIT %s
-        """
+        ma = self.main_alias
+        extra = self._extra_where_clause()
+        if self.source_join_enabled:
+            if not self.source_join_sql:
+                raise RuntimeError("source_join_enabled 为 true 时删除阶段也需要 source_join_sql")
+            delete_sql = f"""
+                DELETE `{ma}` FROM `{self.table_name}` AS `{ma}`
+                {self.source_join_sql}
+                WHERE (
+                        (`{ma}`.`{self.watermark_column}` > %s)
+                     OR (`{ma}`.`{self.watermark_column}` = %s AND `{ma}`.`{self.id_column}` > %s)
+                      )
+                  AND (
+                        (`{ma}`.`{self.watermark_column}` < %s)
+                     OR (`{ma}`.`{self.watermark_column}` = %s AND `{ma}`.`{self.id_column}` <= %s)
+                      )
+                  {extra}
+                ORDER BY `{ma}`.`{self.watermark_column}`, `{ma}`.`{self.id_column}`
+                LIMIT %s
+            """
+        else:
+            delete_sql = f"""
+                DELETE FROM `{self.table_name}`
+                WHERE (
+                        (`{self.watermark_column}` > %s)
+                     OR (`{self.watermark_column}` = %s AND `{self.id_column}` > %s)
+                      )
+                  AND (
+                        (`{self.watermark_column}` < %s)
+                     OR (`{self.watermark_column}` = %s AND `{self.id_column}` <= %s)
+                      )
+                  {extra}
+                ORDER BY `{self.watermark_column}`, `{self.id_column}`
+                LIMIT %s
+            """
 
         try:
             while True:

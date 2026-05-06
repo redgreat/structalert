@@ -424,6 +424,16 @@ def run_business_data_sync():
     min_delete_lag_days = int(sync_config.get('min_delete_lag_days', 7))
     state_table = sync_config.get('state_table', 'cfg_business_sync_state')
     delete_log_table = sync_config.get('delete_log_table', 'cfg_business_sync_delete_log')
+    join_cfg = sync_config.get('source_join') or {}
+    source_join_enabled = bool(join_cfg.get('enabled', False))
+    source_join_sql = join_cfg.get('join_sql', '') or ''
+    source_extra_where = join_cfg.get('extra_where', '') or ''
+    main_alias = join_cfg.get('main_alias', 'a') or 'a'
+    cut_cfg = sync_config.get('sync_latest_cutoff') or {}
+    sync_latest_cutoff_enabled = bool(cut_cfg.get('enabled', False))
+    sync_latest_cutoff_days_ago = int(cut_cfg.get('days_ago', 730))
+    _fixed_dt = cut_cfg.get('fixed_datetime') or cut_cfg.get('datetime')
+    sync_latest_cutoff_datetime = str(_fixed_dt).strip() if _fixed_dt is not None and str(_fixed_dt).strip() else None
 
     logger.info(
         f"业务同步参数: table={table_name}, batch_size={batch_size}, "
@@ -432,7 +442,11 @@ def run_business_data_sync():
         f"delete_sleep_ms={delete_sleep_ms}, delete_lag_days={delete_lag_days}, "
         f"strict_delete_guard_enabled={strict_delete_guard_enabled}, min_delete_lag_days={min_delete_lag_days}, "
         f"dry_run={dry_run}, "
-        f"state_table={state_table}, delete_log_table={delete_log_table}"
+        f"state_table={state_table}, delete_log_table={delete_log_table}, "
+        f"source_join_enabled={source_join_enabled}, main_alias={main_alias}, "
+        f"sync_latest_cutoff_enabled={sync_latest_cutoff_enabled}, "
+        f"sync_latest_cutoff_days_ago={sync_latest_cutoff_days_ago}, "
+        f"sync_latest_cutoff_datetime={sync_latest_cutoff_datetime or '—'}"
     )
 
     synchronizer = BusinessDataSynchronizer(
@@ -442,6 +456,13 @@ def run_business_data_sync():
         table_name=table_name,
         state_table=state_table,
         delete_log_table=delete_log_table,
+        source_join_enabled=source_join_enabled,
+        source_join_sql=source_join_sql,
+        source_extra_where=source_extra_where,
+        main_alias=main_alias,
+        sync_latest_cutoff_enabled=sync_latest_cutoff_enabled,
+        sync_latest_cutoff_days_ago=sync_latest_cutoff_days_ago,
+        sync_latest_cutoff_datetime=sync_latest_cutoff_datetime,
     )
 
     try:
