@@ -66,10 +66,14 @@ def setup_logging(config_path=None):
     
     logger.info(f"日志配置完成，日志目录: {log_dir}")
 
-def validate_config(config_path):
-    """验证配置文件是否有效"""
-    # 先配置日志
-    setup_logging(config_path)
+def validate_config(config_path, quiet=False):
+    """验证配置文件是否有效。
+    quiet=True 时不写 structalert.log，供 Docker healthcheck 等高频探测使用，避免刷屏。"""
+    if quiet:
+        logger.remove()
+        logger.add(sys.stderr, level="WARNING", format="{message}")
+    else:
+        setup_logging(config_path)
     
     if not os.path.exists(config_path):
         logger.error(f"配置文件未找到: {config_path}")
@@ -135,11 +139,17 @@ def main():
     parser.add_argument('command', choices=['validate-config', 'run-scheduler', 'compare-now', 'business-sync-now'], 
                         help='执行命令 (validate-config, run-scheduler, compare-now 或 business-sync-now)')
     parser.add_argument('--config', '-c', type=str, required=True, help='配置文件路径')
+    parser.add_argument(
+        '--quiet',
+        '-q',
+        action='store_true',
+        help='仅用于 validate-config：不写日志文件，减少 healthcheck 对 structalert.log 的干扰',
+    )
     
     args = parser.parse_args()
     
     if args.command == 'validate-config':
-        validate_config(args.config)
+        validate_config(args.config, quiet=args.quiet)
     elif args.command == 'run-scheduler':
         run_scheduler(args.config)
     elif args.command == 'compare-now':

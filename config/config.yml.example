@@ -76,3 +76,9 @@ schedule_set:
     schedule: "0 3 * * 0"
     module: "structalert.tasks"
     function: "run_weekly_sync"
+  # 业务表 tb_workbussinessjsoninfo 增量同步（需在 config 中配置 business_sync；且当天 cfg_compare_diff 中无该表差异才会执行）
+  business_json_sync:
+    enabled: false
+    schedule: "30 4 * * *"
+    module: "structalert.tasks"
+    function: "run_business_data_sync"
