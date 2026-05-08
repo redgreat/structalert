@@ -15,12 +15,6 @@ services:
       - ./config:/opt/structalert/config:ro
       - ./structalert:/opt/structalert/structalert:ro
     command: [ "python", "-m", "structalert", "run-scheduler", "--config", "/opt/structalert/config/config.yml" ]
-    healthcheck:
-      test: [ "CMD-SHELL", "python -m structalert validate-config -q --config /opt/structalert/config/config.yml >/dev/null 2>&1" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
     logging:
       driver: "json-file"
       options:

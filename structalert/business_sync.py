@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 import time
 
 from loguru import logger
@@ -392,7 +392,7 @@ class BusinessDataSynchronizer:
             try:
                 dt = datetime.strptime(s, fmt)
                 if fmt == "%Y-%m-%d":
-                    dt = datetime.combine(dt.date(), time(23, 59, 59, 999000))
+                    dt = datetime.combine(dt.date(), dt_time(23, 59, 59, 999000))
                 return dt
             except ValueError:
                 continue
@@ -420,7 +420,7 @@ class BusinessDataSynchronizer:
             return self._format_ts_ms(self._parse_ts(fixed))
         days_ago = max(0, int(self.sync_latest_cutoff_days_ago))
         cutoff_date = date.today() - timedelta(days=days_ago)
-        cutoff_dt = datetime.combine(cutoff_date, time(23, 59, 59, 999000))
+        cutoff_dt = datetime.combine(cutoff_date, dt_time(23, 59, 59, 999000))
         return self._format_ts_ms(cutoff_dt)
 
     def _calc_run_upper_ts(self, last_ts: str, sync_days_per_run: int) -> str:

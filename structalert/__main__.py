@@ -66,13 +66,14 @@ def setup_logging(config_path=None):
     
     logger.info(f"日志配置完成，日志目录: {log_dir}")
 
-def validate_config(config_path, quiet=False):
+def validate_config(config_path, quiet=False, skip_setup_logging=False):
     """验证配置文件是否有效。
-    quiet=True 时不写 structalert.log，供 Docker healthcheck 等高频探测使用，避免刷屏。"""
+    quiet=True 时不写 structalert.log，供 Docker healthcheck 等高频探测使用，避免刷屏。
+    skip_setup_logging=True 时不调用 setup_logging（调用方已配置过日志，如 run_scheduler）。"""
     if quiet:
         logger.remove()
         logger.add(sys.stderr, level="WARNING", format="{message}")
-    else:
+    elif not skip_setup_logging:
         setup_logging(config_path)
     
     if not os.path.exists(config_path):
@@ -98,10 +99,8 @@ def validate_config(config_path, quiet=False):
 
 def run_scheduler(config_path):
     """启动调度器任务"""
-    # 先配置日志
     setup_logging(config_path)
-    
-    validate_config(config_path)
+    validate_config(config_path, skip_setup_logging=True)
     logger.info("🚀 正在启动 structalert 调度器...")
     scheduler = DockerScheduler(config_path)
     try:
