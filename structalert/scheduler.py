@@ -9,6 +9,8 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR, EVENT_JOB_MISSED
 from loguru import logger
 
+from .pipelines_config import apply_pipeline_layout
+
 
 class DockerScheduler:
     """Docker常驻任务调度器，专门用于根据配置文件自动调度任务"""
@@ -25,7 +27,7 @@ class DockerScheduler:
         """加载配置文件"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
+                self.config = apply_pipeline_layout(yaml.safe_load(f) or {})
             logger.info(f"配置文件加载成功: {self.config_path}")
         except Exception as e:
             logger.error(f"配置文件加载失败: {e}")

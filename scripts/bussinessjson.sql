@@ -131,8 +131,22 @@ SELECT
   Id,
   WorkOrderId,
   CASE
-    WHEN json_unquote(json_extract(BussinessJson,'$.tireNeedOuterTireRemoval')) IN ('','null')
-      THEN json_remove(BussinessJson,'$.tireNeedOuterTireRemoval')
+    WHEN json_unquote(json_extract(BussinessJson,'$.tireNeedOuterTireRemoval')) IN ('','null') THEN
+      CASE
+        WHEN char_length(json_unquote(json_extract(BussinessJson,'$.chpCarModel'))) > 50
+          THEN json_set(
+                 json_remove(BussinessJson,'$.tireNeedOuterTireRemoval'),
+                 '$.chpCarModel',
+                 left(json_unquote(json_extract(BussinessJson,'$.chpCarModel')),50)
+               )
+        ELSE json_remove(BussinessJson,'$.tireNeedOuterTireRemoval')
+      END
+    WHEN char_length(json_unquote(json_extract(BussinessJson,'$.chpCarModel'))) > 50
+      THEN json_set(
+             BussinessJson,
+             '$.chpCarModel',
+             left(json_unquote(json_extract(BussinessJson,'$.chpCarModel')),50)
+           )
     ELSE BussinessJson
   END AS BussinessJson,
   InsertTime,

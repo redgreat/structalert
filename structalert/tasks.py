@@ -6,15 +6,17 @@ from loguru import logger
 from .database import DatabaseManager
 from .comparator import DatabaseComparator
 from .alert_wecom import WeComAlert
-from .business_sync import BusinessDataSynchronizer
 from .sync_module import DataSynchronizer
+from .workorder_archive_sync import run_workorder_archive_sync_job
+from .pipelines_config import apply_pipeline_layout
 
 def load_config():
     config_path = os.environ.get("CONFIG_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yml'))
     if not os.path.exists(config_path):
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'config.yml.example')
     with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
+    return apply_pipeline_layout(raw)
 def run_daily_comparison():
     """主调度任务入口"""
     logger.info("开始执行数据库结构异动检测...")
@@ -115,17 +117,19 @@ def run_daily_comparison():
     else:
         logger.info("所有比对对象结构一致，没有异常。")
 
-def run_weekly_sync():
-    """每周数据同步任务入口"""
-    logger.info("开始执行周数据同步...")
+def run_weekly_sync(force: bool = False):
+    """基础数据同步任务入口（定时默认仅周日执行；force=True 时供手动调试任意日执行）。"""
+    logger.info("开始执行基础数据同步（周任务）...")
 
-    # 检查今天是否是周日
     today = datetime.now()
-    if today.weekday() != 6:  # 0=周一, 6=周日
+    if not force and today.weekday() != 6:  # 0=周一, 6=周日
         logger.info("今天不是周日，跳过周数据同步任务。")
         return
 
-    logger.info("今天是周日，开始执行周数据同步任务。")
+    if force:
+        logger.info("手动调试模式：跳过周日校验，执行基础数据同步。")
+    else:
+        logger.info("今天是周日，开始执行周数据同步任务。")
 
     config = load_config()
 
@@ -376,113 +380,24 @@ def run_manual_sync_with_compare():
     logger.info("手动结构对比和数据迁移任务完成。")
 
 
-def run_business_data_sync():
-    """业务表增量同步任务入口"""
-    logger.info("开始执行业务数据增量同步...")
-
+def run_workorder_archive_sync():
+    """工单归档迁移（CreatedAt 水位 + JOIN 范围）。"""
+    logger.info("开始执行工单归档迁移任务...")
     config = load_config()
-
     try:
-        source_db = DatabaseManager.get_instance("source", config['databases']['source'])
-        his_db = DatabaseManager.get_instance("his", config['databases']['his'])
-        cfg_db = DatabaseManager.get_instance("cfg", config['databases']['cfg'])
+        source_db = DatabaseManager.get_instance("source", config["databases"]["source"])
+        his_db = DatabaseManager.get_instance("his", config["databases"]["his"])
+        cfg_db = DatabaseManager.get_instance("cfg", config["databases"]["cfg"])
     except Exception as e:
         logger.error(f"数据库连接初始化失败: {e}")
         return
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    table_name = "tb_workbussinessjsoninfo"
-
     try:
-        diff_row = cfg_db.fetch_one(
-            """
-            SELECT 1 AS has_diff
-            FROM cfg_compare_diff
-            WHERE compare_date = %s AND object_type = 'TABLE' AND object_name = %s
-            LIMIT 1
-            """,
-            (today_str, table_name),
-        )
+        run_workorder_archive_sync_job(source_db, his_db, cfg_db, config)
     except Exception as e:
-        logger.error(f"查询结构对比结果失败: {e}")
-        return
-
-    if diff_row:
-        logger.error(f"表 {table_name} 在今天的结构对比中存在差异，取消业务数据同步。")
-        return
-
-    sync_config = config.get('business_sync', {})
-    batch_size = int(sync_config.get('batch_size', 2000))
-    concurrency = int(sync_config.get('concurrency', 4))
-    dry_run = bool(sync_config.get('dry_run', False))
-    queue_limit = int(sync_config.get('queue_limit', 8))
-    sync_days_per_run = int(sync_config.get('sync_days_per_run', 1))
-    delete_batch_size = int(sync_config.get('delete_batch_size', 2000))
-    delete_sleep_ms = int(sync_config.get('delete_sleep_ms', 0))
-    delete_lag_days = int(sync_config.get('delete_lag_days', 30))
-    strict_delete_guard_enabled = bool(sync_config.get('strict_delete_guard_enabled', True))
-    min_delete_lag_days = int(sync_config.get('min_delete_lag_days', 7))
-    state_table = sync_config.get('state_table', 'cfg_business_sync_state')
-    delete_log_table = sync_config.get('delete_log_table', 'cfg_business_sync_delete_log')
-    join_cfg = sync_config.get('source_join') or {}
-    source_join_enabled = bool(join_cfg.get('enabled', False))
-    source_join_sql = join_cfg.get('join_sql', '') or ''
-    source_extra_where = join_cfg.get('extra_where', '') or ''
-    main_alias = join_cfg.get('main_alias', 'a') or 'a'
-    cut_cfg = sync_config.get('sync_latest_cutoff') or {}
-    sync_latest_cutoff_enabled = bool(cut_cfg.get('enabled', False))
-    sync_latest_cutoff_days_ago = int(cut_cfg.get('days_ago', 730))
-    _fixed_dt = cut_cfg.get('fixed_datetime') or cut_cfg.get('datetime')
-    sync_latest_cutoff_datetime = str(_fixed_dt).strip() if _fixed_dt is not None and str(_fixed_dt).strip() else None
-
-    logger.info(
-        f"业务同步参数: table={table_name}, batch_size={batch_size}, "
-        f"concurrency={concurrency}, queue_limit={queue_limit}, "
-        f"sync_days_per_run={sync_days_per_run}, delete_batch_size={delete_batch_size}, "
-        f"delete_sleep_ms={delete_sleep_ms}, delete_lag_days={delete_lag_days}, "
-        f"strict_delete_guard_enabled={strict_delete_guard_enabled}, min_delete_lag_days={min_delete_lag_days}, "
-        f"dry_run={dry_run}, "
-        f"state_table={state_table}, delete_log_table={delete_log_table}, "
-        f"source_join_enabled={source_join_enabled}, main_alias={main_alias}, "
-        f"sync_latest_cutoff_enabled={sync_latest_cutoff_enabled}, "
-        f"sync_latest_cutoff_days_ago={sync_latest_cutoff_days_ago}, "
-        f"sync_latest_cutoff_datetime={sync_latest_cutoff_datetime or '—'}"
-    )
-
-    synchronizer = BusinessDataSynchronizer(
-        source_db=source_db,
-        target_db=his_db,
-        cfg_db=cfg_db,
-        table_name=table_name,
-        state_table=state_table,
-        delete_log_table=delete_log_table,
-        source_join_enabled=source_join_enabled,
-        source_join_sql=source_join_sql,
-        source_extra_where=source_extra_where,
-        main_alias=main_alias,
-        sync_latest_cutoff_enabled=sync_latest_cutoff_enabled,
-        sync_latest_cutoff_days_ago=sync_latest_cutoff_days_ago,
-        sync_latest_cutoff_datetime=sync_latest_cutoff_datetime,
-    )
-
-    try:
-        synchronizer.sync_incremental(
-            batch_size=batch_size,
-            max_workers=concurrency,
-            dry_run=dry_run,
-            queue_limit=queue_limit,
-            sync_days_per_run=sync_days_per_run,
-            delete_batch_size=delete_batch_size,
-            delete_sleep_ms=delete_sleep_ms,
-            delete_lag_days=delete_lag_days,
-            strict_delete_guard_enabled=strict_delete_guard_enabled,
-            min_delete_lag_days=min_delete_lag_days,
-        )
-    except Exception as e:
-        logger.error(f"业务数据同步失败: {e}")
+        logger.error(f"工单归档迁移失败: {e}")
         raise
+    logger.info("工单归档迁移任务结束。")
 
-    logger.info("业务数据增量同步完成。")
 
 def generate_statistics(all_objects, diff_objects):
     """生成统计信息"""

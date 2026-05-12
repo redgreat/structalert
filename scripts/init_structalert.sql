@@ -30,32 +30,29 @@ CREATE TABLE serviceordercenter.cfg_compare_diff (
   KEY idx_object_status (object_name,status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='预警系统：对象结构差异对比日志表';
 
--- 业务增量同步状态表：记录 tb_workbussinessjsoninfo 的 LastUpdateTimeStamp + Id 水位
+-- 特殊业务表/工单归档：水位与删除审计（首跑由程序建表或迁移列类型）
 DROP TABLE IF EXISTS serviceordercenter.cfg_business_sync_state;
 CREATE TABLE serviceordercenter.cfg_business_sync_state (
   id int(11) NOT NULL AUTO_INCREMENT,
-  table_name varchar(128) NOT NULL COMMENT '业务同步表名',
-  last_timestamp datetime(3) NOT NULL DEFAULT '1970-01-01 00:00:00.000' COMMENT '增量水位时间戳',
-  last_id bigint(20) NOT NULL DEFAULT 0 COMMENT '同时间戳下主键水位',
+  table_name varchar(128) NOT NULL COMMENT '同步对象键（如 archive_xxx）',
+  last_timestamp datetime(3) NOT NULL DEFAULT '1970-01-01 00:00:00.000' COMMENT '水位时间戳',
+  last_id varchar(128) NOT NULL DEFAULT '' COMMENT '同时间戳下主键水位',
   last_delete_timestamp datetime(3) NOT NULL DEFAULT '1970-01-01 00:00:00.000' COMMENT '删除水位时间戳',
-  last_delete_id bigint(20) NOT NULL DEFAULT 0 COMMENT '同时间戳下删除主键水位',
+  last_delete_id varchar(128) NOT NULL DEFAULT '' COMMENT '同时间戳下删除主键水位',
   updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uk_table_name (table_name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='业务增量同步水位表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='特殊业务表同步水位表';
 
-INSERT INTO serviceordercenter.cfg_business_sync_state (table_name, last_timestamp, last_id, last_delete_timestamp, last_delete_id)
-VALUES ('tb_workbussinessjsoninfo', '1970-01-01 00:00:00.000', 0, '1970-01-01 00:00:00.000', 0);
-
--- 业务增量删除审计日志表：记录源库分批删除行为，便于追溯与回放
+-- 源库删除审计日志
 DROP TABLE IF EXISTS serviceordercenter.cfg_business_sync_delete_log;
 CREATE TABLE serviceordercenter.cfg_business_sync_delete_log (
   id bigint(20) NOT NULL AUTO_INCREMENT,
-  table_name varchar(128) NOT NULL COMMENT '业务表名',
+  table_name varchar(128) NOT NULL COMMENT '对象键',
   old_timestamp datetime(3) NOT NULL COMMENT '删除起始时间水位',
-  old_id bigint(20) NOT NULL COMMENT '删除起始ID水位',
+  old_id varchar(128) NOT NULL COMMENT '删除起始ID水位',
   new_timestamp datetime(3) NOT NULL COMMENT '删除结束时间水位',
-  new_id bigint(20) NOT NULL COMMENT '删除结束ID水位',
+  new_id varchar(128) NOT NULL COMMENT '删除结束ID水位',
   deleted_rows bigint(20) NOT NULL DEFAULT 0 COMMENT '累计删除行数',
   batch_size int(11) NOT NULL DEFAULT 0 COMMENT '删除批次大小',
   sleep_ms int(11) NOT NULL DEFAULT 0 COMMENT '每批删除后休眠毫秒数',
@@ -65,7 +62,7 @@ CREATE TABLE serviceordercenter.cfg_business_sync_delete_log (
   created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_table_created (table_name, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='业务表源库删除审计日志';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='特殊业务表源库删除审计日志';
 
 INSERT INTO serviceordercenter.cfg_compare_objects (object_name, object_type, is_active, need_sync, create_time, update_time) 
 SELECT a.TABLE_NAME,'TABLE',1,0,NOW(),NOW()

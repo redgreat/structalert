@@ -5,7 +5,12 @@ import os
 from pathlib import Path
 from loguru import logger
 from .docker_scheduler import DockerScheduler
-from .tasks import run_business_data_sync, run_daily_comparison, run_manual_sync_with_compare
+from .tasks import (
+    run_manual_sync_with_compare,
+    run_weekly_sync,
+    run_workorder_archive_sync,
+)
+from .pipelines_config import apply_pipeline_layout
 
 def setup_logging(config_path=None):
     """设置日志配置"""
@@ -82,7 +87,7 @@ def validate_config(config_path, quiet=False, skip_setup_logging=False):
     
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            config = apply_pipeline_layout(yaml.safe_load(f) or {})
         
         # 简单校验关键字段
         required_sections = ['databases', 'wecom', 'schedule_set']
@@ -125,18 +130,37 @@ def run_compare_now(config_path):
     logger.info("✅ 手动对比和数据迁移任务执行完成")
 
 
-def run_business_sync_now(config_path):
-    """立即执行一次业务数据增量同步"""
+def run_archive_sync_now(config_path):
+    """立即执行一次工单归档迁移（与定时任务相同逻辑）。"""
     setup_logging(config_path)
     os.environ["CONFIG_PATH"] = config_path
-    logger.info("⚡ 正在手动触发业务数据增量同步任务...")
-    run_business_data_sync()
-    logger.info("✅ 业务数据增量同步任务执行完成")
+    logger.info("⚡ 正在手动触发工单归档迁移任务...")
+    run_workorder_archive_sync()
+    logger.info("✅ 工单归档迁移任务执行完成")
+
+
+def run_weekly_sync_now(config_path):
+    """立即执行一次基础数据同步（跳过「仅周日」限制，便于调试）。"""
+    setup_logging(config_path)
+    os.environ["CONFIG_PATH"] = config_path
+    logger.info("⚡ 正在手动触发基础数据同步（cfg_compare_objects）...")
+    run_weekly_sync(force=True)
+    logger.info("✅ 基础数据同步任务执行完成")
+
 
 def main():
     parser = argparse.ArgumentParser(description="structalert 命令行工具")
-    parser.add_argument('command', choices=['validate-config', 'run-scheduler', 'compare-now', 'business-sync-now'], 
-                        help='执行命令 (validate-config, run-scheduler, compare-now 或 business-sync-now)')
+    parser.add_argument(
+        "command",
+        choices=[
+            "validate-config",
+            "run-scheduler",
+            "compare-now",
+            "weekly-sync-now",
+            "archive-sync-now",
+        ],
+        help="执行命令 (validate-config, run-scheduler, compare-now, weekly-sync-now, archive-sync-now)",
+    )
     parser.add_argument('--config', '-c', type=str, required=True, help='配置文件路径')
     parser.add_argument(
         '--quiet',
@@ -151,10 +175,12 @@ def main():
         validate_config(args.config, quiet=args.quiet)
     elif args.command == 'run-scheduler':
         run_scheduler(args.config)
-    elif args.command == 'compare-now':
+    elif args.command == "compare-now":
         run_compare_now(args.config)
-    elif args.command == 'business-sync-now':
-        run_business_sync_now(args.config)
+    elif args.command == "weekly-sync-now":
+        run_weekly_sync_now(args.config)
+    elif args.command == "archive-sync-now":
+        run_archive_sync_now(args.config)
 
 if __name__ == '__main__':
     main()

@@ -44,41 +44,75 @@ databases:
 wecom:
   webhook_key: ""
 
-# 数据同步配置
-sync:
-  # 增量同步：同步多少天前的数据（从今天开始计算）
-  # 例如：days_before: 30 表示同步30天前的那一周的数据（7天时间窗口）
-  # 设置为 null 或删除此配置项表示全量同步
-  days_before: null
+# =============================================================================
+# 三大能力（启动时由 structalert.pipelines_config 展开为 schedule_set / sync 等）
+# =============================================================================
+pipelines:
+  struct_compare:
+    schedule:
+      job_id: daily_struct_compare
+      enabled: true
+      cron: "0 2 * * *"
+      module: "structalert.tasks"
+      function: "run_daily_comparison"
 
-  # 批量写入大小：每次批量INSERT/UPDATE的记录数
-  # 值越大，性能越好，但内存消耗也越大
-  batch_size: 500
+  base_data_sync:
+    schedule:
+      job_id: weekly_data_sync
+      enabled: true
+      cron: "0 3 * * 0"
+      module: "structalert.tasks"
+      function: "run_weekly_sync"
+    sync:
+      days_before: null
+      batch_size: 500
+      concurrency: 2
+      dry_run: true
 
-  # 并发线程数：数据写入的并发工作线程数
-  # 建议设置为2-4，过大会增加数据库压力
-  concurrency: 2
-
-  # 试运行模式：true表示只模拟执行不实际写入数据，false表示实际执行
-  # 建议首次运行时设置为true，验证无误后再设置为false
-  dry_run: true
-
-schedule_set:
-  daily_struct_compare:
-    enabled: true
-    # 每天凌晨两点执行结构对比
-    schedule: "0 2 * * *"
-    module: "structalert.tasks"
-    function: "run_daily_comparison"
-  weekly_data_sync:
-    enabled: true
-    # 每周日凌晨三点执行数据同步(在结构对比之后)
-    schedule: "0 3 * * 0"
-    module: "structalert.tasks"
-    function: "run_weekly_sync"
-  # 业务表 tb_workbussinessjsoninfo 增量同步（需在 config 中配置 business_sync；且当天 cfg_compare_diff 中无该表差异才会执行）
-  business_json_sync:
+  special_tables_sync:
+    schedule:
+      job_id: workorder_archive_sync
+      enabled: false
+      cron: "45 3 * * *"
+      module: "structalert.tasks"
+      function: "run_workorder_archive_sync"
     enabled: false
-    schedule: "30 4 * * *"
-    module: "structalert.tasks"
-    function: "run_business_data_sync"
+    dry_run: true
+    window_days_per_run: 7
+    skip_if_struct_diff: true
+    state_table: "cfg_business_sync_state"
+    delete_log_table: "cfg_business_sync_delete_log"
+    batch_size: 2000
+    concurrency: 4
+    queue_limit: 8
+    cutoff:
+      days_ago: 730
+    delete:
+      enabled: true
+      batch_size: 2000
+      sleep_ms: 0
+      lag_days: 30
+      strict_guard: true
+      min_lag_days: 7
+    objects:
+      - key: archive_tb_workbussinessjsoninfo
+        kind: workbusiness_json
+        target_table: tb_workbussinessjsoninfo
+        pk: Id
+        enabled: true
+        json_clean:
+          column: BussinessJson
+          keys: ["tireNeedOuterTireRemoval"]
+      - key: archive_basic_resourceitem
+        kind: basic_resourceitem
+        target_table: basic_resourceitem
+        pk: Id
+        enabled: true
+
+# 可选：与 pipelines 合并的额外定时任务
+# schedule_set:
+#   extra_job:
+#     enabled: false
+#     schedule: "0 6 * * *"
+#     module: "structalert.tasks"
+#     function: "run_daily_comparison"
